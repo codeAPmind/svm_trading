@@ -18,6 +18,7 @@ from feature.technical_indicators import (
     calc_lsma, calc_tsf
 )
 from feature.vwap_indicator import calc_vwap_features, calc_volume_features
+from feature.alpha_factors import alpha1, alpha5, alpha42
 from config.settings import SVM_CFG
 
 # 不参与 SVM 训练的列（原始数据 + 绝对值类指标）
@@ -109,6 +110,16 @@ class FeatureEngineer:
             bb_df, atr_ratio, vwap_df, vol_df,
             lsma_25, tsf_9_7, lsma_minus_tsf
         ], axis=1)
+
+        # ── Alpha 扩展（A股优先，但通用也可计算） ─────────────
+        try:
+            a1  = alpha1(close, df['open'], volume, window=6)
+            a5  = alpha5(high, volume, rank_window=5, corr_window=5, max_window=3)
+            a42 = alpha42(high, volume, window=10)
+            result = pd.concat([result, a1, a5, a42], axis=1)
+        except Exception:
+            # 因子计算容错，避免个别异常导致整体失败
+            pass
 
         return result
 
