@@ -143,3 +143,55 @@ def calc_atr(
     tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(window=period).mean()
     return pd.DataFrame({'atr': atr}, index=close.index)
+
+
+# ─────────────────────────────────────────────────────────
+# 线性回归类指标：LSMA 与 TSF
+# ─────────────────────────────────────────────────────────
+def _linear_regression_series(y: pd.Series, length: int) -> pd.Series:
+    """
+    对滚动窗口做一元线性回归：y ~ a + b * t
+    返回各窗口末端点的拟合值 y_hat_last。
+    """
+    if length <= 1:
+        return y.copy()
+    t = np.arange(length, dtype=float)
+    t_mean = t.mean()
+    t_var = ((t - t_mean) ** 2).sum()
+    def reg_last(arr: np.ndarray) -> float:
+        y_arr = arr.astype(float)
+        y_mean = y_arr.mean()
+        cov_ty = ((t - t_mean) * (y_arr - y_mean)).sum()
+        b = cov_ty / t_var if t_var != 0 else 0.0
+        a = y_mean - b * t_mean
+        # 末端点的 t = length-1
+        return a + b * (length - 1)
+    return y.rolling(window=length).apply(lambda x: reg_last(x), raw=True)
+
+
+def calc_lsma(close: pd.Series, length: int = 25) -> pd.Series:
+    """
+    LSMA (Least Squares Moving Average): 最小二乘移动平均
+    计算方法：对长度为 length 的滚动窗口线性回归，取末端点拟合值形成平滑序列。
+    """
+    return _linear_regression_series(close, length).rename(f'lsma_{length}')
+
+
+def calc_tsf(close: pd.Series, length: int = 9, forecast: int = 7) -> pd.Series:
+    """
+    TSF (Time Series Forecast): 时间序列线性回归外推
+    计算方法：在长度为 length 的窗口上拟合 y ~ a + b*t，并对未来 forecast 步做外推。
+    """
+    if length <= 1:
+        return close.copy().rename(f'tsf_{length}_{forecast}')
+    t = np.arange(length, dtype=float)
+    t_mean = t.mean()
+    t_var = ((t - t_mean) ** 2).sum()
+    def reg_forecast(arr: np.ndarray) -> float:
+        y_arr = arr.astype(float)
+        y_mean = y_arr.mean()
+        cov_ty = ((t - t_mean) * (y_arr - y_mean)).sum()
+        b = cov_ty / t_var if t_var != 0 else 0.0
+        a = y_mean - b * t_mean
+        return a + b * (length - 1 + forecast)
+    return close.rolling(window=length).apply(lambda x: reg_forecast(x), raw=True).rename(f'tsf_{length}_{forecast}')

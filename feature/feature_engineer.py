@@ -14,7 +14,8 @@ from sklearn.preprocessing import StandardScaler
 
 from feature.technical_indicators import (
     calc_macd, calc_rsi, calc_kdj,
-    calc_cci, calc_bollinger, calc_atr
+    calc_cci, calc_bollinger, calc_atr,
+    calc_lsma, calc_tsf
 )
 from feature.vwap_indicator import calc_vwap_features, calc_volume_features
 from config.settings import SVM_CFG
@@ -85,6 +86,10 @@ class FeatureEngineer:
         cci_df  = calc_cci(high, low, close)
         bb_df   = calc_bollinger(close)
         atr_df  = calc_atr(high, low, close)
+        # 回归类平滑与预测
+        lsma_25 = calc_lsma(close, length=25)
+        tsf_9_7 = calc_tsf(close, length=9, forecast=7)
+        lsma_minus_tsf = (lsma_25 - tsf_9_7).rename('lsma_minus_tsf_25_9_7')
 
         # ATR 相对化（避免绝对值量纲问题）
         atr_ratio = atr_df['atr'] / close.replace(0, np.nan)
@@ -101,7 +106,8 @@ class FeatureEngineer:
         # ── 合并 ─────────────────────────────────────────────
         result = pd.concat([
             df, macd_df, rsi_df, kdj_df, cci_df,
-            bb_df, atr_ratio, vwap_df, vol_df
+            bb_df, atr_ratio, vwap_df, vol_df,
+            lsma_25, tsf_9_7, lsma_minus_tsf
         ], axis=1)
 
         return result
