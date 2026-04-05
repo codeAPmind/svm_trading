@@ -248,6 +248,22 @@ def run_ai_analysis(
         'vwap_ratio_20':  round(float(latest.get('vwap_ratio_20',  1)), 4),
     }
 
+    # 选取一组核心 Alpha 因子做摘要（存在即输出）
+    alpha_keys = [
+        'alpha25', 'alpha5', 'alpha42',
+        'mf_strength_6', 'mf_strength_12', 'mf_ratio_6', 'mf_ratio_12',
+        'signed_vol_6', 'signed_vol_12', 'vol_surge_20',
+        'gap_pct', 'gap_alpha107', 'gap_fill_ratio',
+        'vpd_price_vol_6', 'vpd_range_vol_6',
+    ]
+    alpha_summary = {}
+    for k in alpha_keys:
+        if k in latest.index:
+            try:
+                alpha_summary[k] = round(float(latest.get(k, 0)), 4)
+            except Exception:
+                continue
+
     # 获取新闻与宏观数据
     news_summary  = NewsFetcher.fetch_hk_news(code)
     macro_context = MacroAnalyzer.get_macro_context()
@@ -275,6 +291,10 @@ def run_ai_analysis(
         f.write(f"## 技术指标\n")
         for k, v in tech_summary.items():
             f.write(f"- {k}: {v}\n")
+        if alpha_summary:
+            f.write(f"\n## Alpha 因子摘要\n")
+            for k, v in alpha_summary.items():
+                f.write(f"- {k}: {v}\n")
         f.write(f"\n## DeepSeek 分析报告\n\n{report}\n")
 
     print(f"\n  AI 分析报告已保存至 {report_path}")
