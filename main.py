@@ -25,6 +25,7 @@ import pandas as pd
 from config.settings import SVM_CFG, BACKTEST_CFG
 from config.symbols import DEFAULT_CODE, DEFAULT_NAME
 from data.futu_client import FutuDataClient
+from data.tushare_client import TushareDataClient
 from data.news_fetcher import NewsFetcher
 from feature.feature_engineer import FeatureEngineer
 from model.svm_model import SVMTradingModel
@@ -66,7 +67,9 @@ def run_backtest(
 
     # ── Step 1: 获取历史K线 ────────────────────────────────────
     print("\n[Step 1] 获取历史K线数据...")
-    client = FutuDataClient()
+    # 简单市场判断：包含 'HK.' → 港股；否则默认 A 股
+    is_hk = code.upper().startswith('HK.')
+    client = FutuDataClient() if is_hk else TushareDataClient()
     client.connect()
     try:
         df = client.get_history_kline(code, start, end)
@@ -179,7 +182,8 @@ def run_realtime_signal(
     end_date   = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d')
 
-    client = FutuDataClient()
+    is_hk = code.upper().startswith('HK.')
+    client = FutuDataClient() if is_hk else TushareDataClient()
     client.connect()
     try:
         df         = client.get_history_kline(code, start_date, end_date)
