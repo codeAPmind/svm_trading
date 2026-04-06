@@ -31,10 +31,37 @@ class FutuConfig:
 
 @dataclass
 class SVMConfig:
-    """SVM 模型配置"""
+    """SVM 模型配置
+
+    C（惩罚系数）：控制对误分类的容忍度
+      - 小C → 宽间隔，容忍误分类，泛化更好，不易过拟合
+      - 大C → 窄间隔，尽量不误分类，容易过拟合
+      - 搜索范围用对数均匀分布，避免跨度过大时遗漏最优值
+
+    gamma（RBF核带宽）：控制单个样本的影响范围
+      - 小gamma → 影响范围大，决策面平滑，欠拟合风险
+      - 大gamma → 影响范围小，决策面复杂，过拟合风险
+      - 'scale' = 1/(n_features × var(X))，随特征数自动缩放
+      - 'auto'  = 1/n_features，不考虑特征方差
+      - 加入具体数值候选，在 scale/auto 之外再精细搜索
+
+    v2.0 变更：
+      - C_range 从 [0.1,1,10,100]（4个，10倍间距）
+              → [0.1,0.5,1,5,10,50,100]（7个，更均匀）
+      - gamma_range 从 ['scale','auto']（2个）
+                  → ['scale','auto',0.001,0.01,0.1]（5个，加具体值）
+      - 搜索组合数：32 → 7×5×2×2 = 140（约4倍，结果更精确）
+    """
     kernel: str = 'rbf'
-    C_range: List[float] = field(default_factory=lambda: [0.1, 1, 10, 100])
-    gamma_range: List[str] = field(default_factory=lambda: ['scale', 'auto'])
+    # C 搜索空间：对数均匀，覆盖从宽松到严格的完整范围
+    C_range: List[float] = field(
+        default_factory=lambda: [0.1, 0.5, 1, 5, 10, 50, 100]
+    )
+    # gamma 搜索空间：自动值 + 具体数值候选
+    # 具体值参考：特征数65时 scale ≈ 1/(65×var)，通常在 0.001~0.05 之间
+    gamma_range: List = field(
+        default_factory=lambda: ['scale', 'auto', 0.001, 0.01, 0.1]
+    )
     test_size: float = 0.2
     lookback_window: int = 20
     prediction_horizon: int = 5

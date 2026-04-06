@@ -52,7 +52,8 @@ def run_backtest(
     start: str,
     end: str,
     optimize: bool = True,
-    conf_threshold: float = 0.7
+    conf_threshold: float = 0.7,
+    fast_search: bool = False,
 ) -> tuple:
     """
     完整回测流程（步骤 1~9）
@@ -96,7 +97,7 @@ def run_backtest(
     # ── Step 4: SVM 训练 ───────────────────────────────────────
     print("\n[Step 4] SVM 模型训练" + ("（含 GridSearchCV）..." if optimize else "（快速模式）..."))
     model = SVMTradingModel()
-    model.train(X_train, y_train, optimize=optimize)
+    model.train(X_train, y_train, optimize=optimize, fast_search=fast_search)
 
     # ── Step 5: 模型评估 ───────────────────────────────────────
     print("\n[Step 5] 模型评估...")
@@ -326,6 +327,8 @@ def main():
     parser.add_argument('--no-optimize', action='store_true',             help='跳过 GridSearchCV 参数优化（快速）')
     parser.add_argument('--conf-threshold', type=float, default=0.7,
                         help='信号最小置信度阈值，低于此值的买卖信号将视为观望')
+    parser.add_argument('--fast-search', action='store_true',
+                        help='启用 RandomizedSearchCV（更快的随机搜索）')
 
     args = parser.parse_args()
 
@@ -341,7 +344,8 @@ def main():
         model, fe, signals, metrics = run_backtest(
             args.code, args.start, args.end,
             optimize=not args.no_optimize,
-            conf_threshold=args.conf_threshold
+            conf_threshold=args.conf_threshold,
+            fast_search=args.fast_search
         )
 
     # ── 实时信号模式 ───────────────────────────────────────────
