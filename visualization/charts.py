@@ -18,12 +18,17 @@ OUTPUT_DIR = Path(__file__).parent.parent / 'output'
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
+def _suffix_text(file_suffix: str | None) -> str:
+    return f"_{file_suffix}" if file_suffix else ""
+
+
 def plot_backtest_report(
     price_df: pd.DataFrame,
     signals_df: pd.DataFrame,
     portfolio_df: pd.DataFrame,
     code: str,
-    save_path: str = None
+    save_path: str = None,
+    file_suffix: str | None = None,
 ):
     """
     生成完整的回测报告图表（4 子图）
@@ -41,7 +46,8 @@ def plot_backtest_report(
         save_path:    保存路径（None 则自动命名至 output/）
     """
     if save_path is None:
-        save_path = str(OUTPUT_DIR / f"backtest_{code.replace('.', '_')}.png")
+        suffix = _suffix_text(file_suffix)
+        save_path = str(OUTPUT_DIR / f"backtest_{code.replace('.', '_')}{suffix}.png")
 
     fig, axes = plt.subplots(
         4, 1, figsize=(16, 22),
@@ -130,12 +136,18 @@ def plot_backtest_report(
     return save_path
 
 
-def plot_signal_distribution(signals_df: pd.DataFrame, code: str, save_path: str = None):
+def plot_signal_distribution(
+    signals_df: pd.DataFrame,
+    code: str,
+    save_path: str = None,
+    file_suffix: str | None = None,
+):
     """
     绘制信号置信度分布图
     """
     if save_path is None:
-        save_path = str(OUTPUT_DIR / f"signal_dist_{code.replace('.', '_')}.png")
+        suffix = _suffix_text(file_suffix)
+        save_path = str(OUTPUT_DIR / f"signal_dist_{code.replace('.', '_')}{suffix}.png")
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     fig.suptitle(f'信号分布分析 — {code}', fontsize=13)
@@ -177,13 +189,15 @@ def plot_technical_indicators(
     df: pd.DataFrame,
     code: str,
     days: int = 120,
-    save_path: str = None
+    save_path: str = None,
+    file_suffix: str | None = None,
 ):
     """
     绘制技术指标面板（K线 + MACD + RSI + KDJ）
     """
     if save_path is None:
-        save_path = str(OUTPUT_DIR / f"tech_{code.replace('.', '_')}.png")
+        suffix = _suffix_text(file_suffix)
+        save_path = str(OUTPUT_DIR / f"tech_{code.replace('.', '_')}{suffix}.png")
 
     df = df.tail(days).copy()
 

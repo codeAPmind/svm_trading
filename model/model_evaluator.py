@@ -18,6 +18,10 @@ class ModelEvaluator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
 
+    @staticmethod
+    def _suffix_text(file_suffix: str | None) -> str:
+        return f"_{file_suffix}" if file_suffix else ""
+
     # ─────────────────────────────────────────────────────────
     def feature_importance(self) -> pd.Series:
         """
@@ -41,7 +45,8 @@ class ModelEvaluator:
         self,
         X: np.ndarray,
         y: np.ndarray,
-        save: bool = True
+        save: bool = True,
+        file_suffix: str | None = None,
     ):
         """绘制学习曲线以诊断过拟合/欠拟合"""
         tscv = TimeSeriesSplit(n_splits=5)
@@ -71,13 +76,14 @@ class ModelEvaluator:
         plt.tight_layout()
 
         if save:
-            path = self.output_dir / 'learning_curve.png'
+            suffix = self._suffix_text(file_suffix)
+            path = self.output_dir / f'learning_curve{suffix}.png'
             plt.savefig(path, dpi=120, bbox_inches='tight')
             print(f"[ModelEvaluator] 学习曲线已保存至 {path}")
         plt.close()
 
     # ─────────────────────────────────────────────────────────
-    def plot_confusion_matrix(self, cm: np.ndarray, save: bool = True):
+    def plot_confusion_matrix(self, cm: np.ndarray, save: bool = True, file_suffix: str | None = None):
         """可视化混淆矩阵"""
         import matplotlib.patches as mpatches
 
@@ -105,7 +111,8 @@ class ModelEvaluator:
         plt.tight_layout()
 
         if save:
-            path = self.output_dir / 'confusion_matrix.png'
+            suffix = self._suffix_text(file_suffix)
+            path = self.output_dir / f'confusion_matrix{suffix}.png'
             plt.savefig(path, dpi=120, bbox_inches='tight')
             print(f"[ModelEvaluator] 混淆矩阵已保存至 {path}")
         plt.close()

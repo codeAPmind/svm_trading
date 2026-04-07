@@ -54,6 +54,7 @@ def run_backtest(
     optimize: bool = True,
     conf_threshold: float = 0.7,
     fast_search: bool = False,
+    file_suffix: str | None = None,
 ) -> tuple:
     """
     完整回测流程（步骤 1~9）
@@ -105,7 +106,7 @@ def run_backtest(
 
     # 混淆矩阵可视化
     evaluator = ModelEvaluator(model, feature_cols)
-    evaluator.plot_confusion_matrix(eval_result['confusion_matrix'])
+    evaluator.plot_confusion_matrix(eval_result['confusion_matrix'], file_suffix=file_suffix)
 
     # ── Step 6: 生成交易信号 ───────────────────────────────────
     print("\n[Step 6] 生成交易信号...")
@@ -133,7 +134,8 @@ def run_backtest(
     print_metrics_report(metrics)
 
     # 保存绩效到 JSON
-    metrics_path = OUTPUT_DIR / f"metrics_{code.replace('.', '_')}.json"
+    suffix = f"_{file_suffix}" if file_suffix else ""
+    metrics_path = OUTPUT_DIR / f"metrics_{code.replace('.', '_')}{suffix}.json"
     with open(metrics_path, 'w', encoding='utf-8') as f:
         json.dump({
             'code': code, 'start': start, 'end': end,
@@ -147,8 +149,8 @@ def run_backtest(
 
     # ── Step 9: 可视化 ────────────────────────────────────────
     print("\n[Step 9] 生成可视化报告...")
-    plot_backtest_report(test_prices, signals_df, portfolio_df, code)
-    plot_signal_distribution(signals_df, code)
+    plot_backtest_report(test_prices, signals_df, portfolio_df, code, file_suffix=file_suffix)
+    plot_signal_distribution(signals_df, code, file_suffix=file_suffix)
 
     # ── Step 10: 保存模型 ─────────────────────────────────────
     model.save_model()
@@ -229,7 +231,8 @@ def run_ai_analysis(
     name: str,
     signal_info: dict,
     featured_df: pd.DataFrame,
-    fundamental: dict
+    fundamental: dict,
+    file_suffix: str | None = None,
 ) -> str:
     """调用 DeepSeek AI 进行综合多空分析，返回报告字符串"""
     print("\n" + "=" * 65)
@@ -282,7 +285,9 @@ def run_ai_analysis(
     )
 
     # 保存报告
-    report_path = OUTPUT_DIR / f"ai_report_{code.replace('.', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+    if file_suffix is None:
+        file_suffix = datetime.now().strftime('%Y%m%d_%H%M')
+    report_path = OUTPUT_DIR / f"ai_report_{code.replace('.', '_')}_{file_suffix}.md"
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(f"# AI 多空分析报告 — {name}({code})\n")
         f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -331,6 +336,7 @@ def main():
                         help='启用 RandomizedSearchCV（更快的随机搜索）')
 
     args = parser.parse_args()
+    run_suffix = datetime.now().strftime('%Y%m%d_%H%M')
 
     print("\n" + "█" * 65)
     print("  SVM 港股买卖点判断交易系统  v1.0")
@@ -345,7 +351,8 @@ def main():
             args.code, args.start, args.end,
             optimize=not args.no_optimize,
             conf_threshold=args.conf_threshold,
-            fast_search=args.fast_search
+            fast_search=args.fast_search,
+            file_suffix=run_suffix,
         )
 
     # ── 实时信号模式 ───────────────────────────────────────────
@@ -373,7 +380,8 @@ def main():
         # AI 分析
         report = run_ai_analysis(
             args.code, args.name,
-            signal_info, featured_df, fundamental
+            signal_info, featured_df, fundamental,
+            file_suffix=run_suffix,
         )
 
     print("\n" + "=" * 65)
