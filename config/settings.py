@@ -10,9 +10,31 @@ from pathlib import Path
 # 自动加载 .env 文件（不依赖 python-dotenv，手动解析）
 _env_path = Path(__file__).parent.parent / '.env'
 if _env_path.exists():
+    current_section = None
     with open(_env_path, encoding='utf-8') as f:
         for line in f:
             line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            # 兼容简化 YAML 段落（例如 fmp: / deepseek:）
+            if line.endswith(':') and '=' not in line:
+                current_section = line[:-1].strip().lower()
+                continue
+
+            # 兼容 YAML 风格键值（key: value）
+            if ':' in line and '=' not in line:
+                key, _, val = line.partition(':')
+                key = key.strip().lower()
+                val = val.strip().strip('"').strip("'")
+
+                if current_section == 'fmp' and key == 'api_key' and val and 'FMP_API_KEY' not in os.environ:
+                    os.environ['FMP_API_KEY'] = val
+                if current_section == 'deepseek' and key == 'api_key' and val and 'DEEPSEEK_API_KEY' not in os.environ:
+                    os.environ['DEEPSEEK_API_KEY'] = val
+                continue
+
+            # 标准 .env 风格（KEY=VALUE）
             if line and not line.startswith('#') and '=' in line:
                 key, _, val = line.partition('=')
                 key = key.strip()
@@ -90,11 +112,20 @@ class DeepSeekConfig:
     temperature: float = 0.3
 
 
+@dataclass
+class FMPConfig:
+    """FMP API 配置"""
+    api_key: str = os.environ.get('FMP_API_KEY', '')
+    base_url: str = os.environ.get('FMP_BASE_URL', 'https://financialmodelingprep.com/api/v3')
+    request_timeout: int = int(os.environ.get('FMP_TIMEOUT', '30'))
+
+
 # ── 全局配置实例 ──────────────────────────────────────────────
 FUTU_CFG = FutuConfig()
 SVM_CFG = SVMConfig()
 BACKTEST_CFG = BacktestConfig()
 DEEPSEEK_CFG = DeepSeekConfig()
+FMP_CFG = FMPConfig()
 
 # 向后兼容：部分旧代码引用 CLAUDE_CFG
 CLAUDE_CFG = DEEPSEEK_CFG

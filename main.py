@@ -13,6 +13,7 @@
 """
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,9 +25,8 @@ import pandas as pd
 # ── 项目内部模块 ───────────────────────────────────────────────
 from config.settings import SVM_CFG, BACKTEST_CFG
 from config.symbols import DEFAULT_CODE, DEFAULT_NAME
-from data.futu_client import FutuDataClient
-from data.tushare_client import TushareDataClient
-from data.news_fetcher import NewsFetcher
+from data.fmp_client import FMPDataClient
+from data.symbol_mapper import SymbolMapper
 from feature.feature_engineer import FeatureEngineer
 from model.svm_model import SVMTradingModel
 from model.signal_generator import SignalGenerator
@@ -35,6 +35,7 @@ from backtest.backtest_engine import BacktestEngine
 from backtest.metrics import calculate_metrics, print_metrics_report, metrics_to_dict
 from analysis.ai_analyst import AIAnalyst
 from analysis.macro_analysis import MacroAnalyzer
+from notification.feishu_notifier import push_run_report
 from visualization.charts import plot_backtest_report, plot_signal_distribution
 
 OUTPUT_DIR = Path(__file__).parent / 'output'
@@ -42,6 +43,15 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 SCALER_PATH = Path(__file__).parent / 'models' / 'feature_scaler.pkl'
 FEATURES_PATH = Path(__file__).parent / 'models' / 'feature_columns.json'
+
+
+def _market_currency(code: str) -> str:
+    market = SymbolMapper.detect_market(code)
+    if market == "HK":
+        return "HKD"
+    if market == "CN":
+        return "CNY"
+    return "USD"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -63,15 +73,13 @@ def run_backtest(
         (model, fe, signals_df, metrics)
     """
     print("\n" + "=" * 65)
-    print(f"  SVM 港股交易策略 — 回测模式")
+    print(f"  SVM 多市场交易策略(FMP) — 回测模式")
     print(f"  标的: {code}   区间: {start} ~ {end}")
     print("=" * 65)
 
     # ── Step 1: 获取历史K线 ────────────────────────────────────
     print("\n[Step 1] 获取历史K线数据...")
-    # 简单市场判断：包含 'HK.' → 港股；否则默认 A 股
-    is_hk = code.upper().startswith('HK.')
-    client = FutuDataClient() if is_hk else TushareDataClient()
+    client = FMPDataClient()
     client.connect()
     try:
         df = client.get_history_kline(code, start, end)
@@ -185,8 +193,7 @@ def run_realtime_signal(
     end_date   = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d')
 
-    is_hk = code.upper().startswith('HK.')
-    client = FutuDataClient() if is_hk else TushareDataClient()
+    client = FMPDataClient()
     client.connect()
     try:
         df         = client.get_history_kline(code, start_date, end_date)
@@ -218,7 +225,7 @@ def run_realtime_signal(
     print(f"  置信度:    {signal_info['confidence']:.1%}")
     print(f"  买入概率:  {signal_info['prob_buy']:.1%}")
     print(f"  卖出概率:  {signal_info['prob_sell']:.1%}")
-    print(f"  最新收盘:  {df['close'].iloc[-1]:.2f} HKD")
+    print(f"  最新收盘:  {df['close'].iloc[-1]:.2f} {_market_currency(code)}")
 
     return signal_info, featured_df, fundamental
 
@@ -269,7 +276,7 @@ def run_ai_analysis(
                 continue
 
     # 获取新闻与宏观数据
-    news_summary  = NewsFetcher.fetch_hk_news(code)
+    news_summary  = FMPDataClient().get_stock_news(code, limit=10)
     macro_context = MacroAnalyzer.get_macro_context()
 
     # AI 分析
@@ -313,16 +320,16 @@ def run_ai_analysis(
 # ══════════════════════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(
-        description='SVM 港股交易策略系统',
+        description='SVM 多市场交易策略系统（FMP 数据源）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   python main.py --code HK.00700 --name 腾讯控股 --start 2019-01-01 --end 2025-12-31 --mode full
-  python main.py --code HK.09988 --mode backtest --no-optimize
-  python main.py --code HK.00700 --mode realtime
+  python main.py --code AAPL --name Apple --start 2019-01-01 --end 2025-12-31 --mode full
+  python main.py --code SH.600519 --name 贵州茅台 --mode backtest --no-optimize
         """
     )
-    parser.add_argument('--code',        type=str, default=DEFAULT_CODE,  help='港股代码（如 HK.00700）')
+    parser.add_argument('--code',        type=str, default=DEFAULT_CODE,  help='股票代码（如 HK.00700 / AAPL / SH.600519）')
     parser.add_argument('--name',        type=str, default=DEFAULT_NAME,  help='股票名称（用于报告）')
     parser.add_argument('--start',       type=str, default='2019-01-01',  help='回测起始日期')
     parser.add_argument('--end',         type=str, default='2025-12-31',  help='回测结束日期')
@@ -334,16 +341,21 @@ def main():
                         help='信号最小置信度阈值，低于此值的买卖信号将视为观望')
     parser.add_argument('--fast-search', action='store_true',
                         help='启用 RandomizedSearchCV（更快的随机搜索）')
+    parser.add_argument('--feishu-webhook', type=str, default=os.environ.get("FEISHU_WEBHOOK", ""),
+                        help='飞书机器人 webhook，配置后运行结束自动推送结果')
 
     args = parser.parse_args()
     run_suffix = datetime.now().strftime('%Y%m%d_%H%M')
 
     print("\n" + "█" * 65)
-    print("  SVM 港股买卖点判断交易系统  v1.0")
+    print("  SVM 多市场买卖点判断交易系统(FMP)  v1.1")
     print(f"  模式: {args.mode.upper()}   标的: {args.name}({args.code})")
     print("█" * 65)
 
     model, fe = None, None
+    metrics_path = None
+    backtest_png_path = None
+    ai_report_path = None
 
     # ── 回测模式 ───────────────────────────────────────────────
     if args.mode in ('backtest', 'full'):
@@ -354,6 +366,8 @@ def main():
             fast_search=args.fast_search,
             file_suffix=run_suffix,
         )
+        metrics_path = OUTPUT_DIR / f"metrics_{args.code.replace('.', '_')}_{run_suffix}.json"
+        backtest_png_path = OUTPUT_DIR / f"backtest_{args.code.replace('.', '_')}_{run_suffix}.png"
 
     # ── 实时信号模式 ───────────────────────────────────────────
     if args.mode in ('realtime', 'full'):
@@ -383,6 +397,23 @@ def main():
             signal_info, featured_df, fundamental,
             file_suffix=run_suffix,
         )
+        ai_report_path = OUTPUT_DIR / f"ai_report_{args.code.replace('.', '_')}_{run_suffix}.md"
+
+    if args.feishu_webhook:
+        try:
+            push_run_report(
+                webhook_url=args.feishu_webhook,
+                code=args.code,
+                name=args.name,
+                mode=args.mode,
+                run_suffix=run_suffix,
+                metrics_path=metrics_path,
+                backtest_png_path=backtest_png_path,
+                ai_report_md_path=ai_report_path,
+            )
+            print("[Feishu] 已推送运行结果")
+        except Exception as e:
+            print(f"[Feishu] 推送失败: {e}")
 
     print("\n" + "=" * 65)
     print("  系统运行完毕。输出文件保存在 output/ 目录。")
