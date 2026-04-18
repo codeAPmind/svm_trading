@@ -89,6 +89,19 @@ class SVMConfig:
     prediction_horizon: int = 5
     threshold_buy: float = 0.02
     threshold_sell: float = -0.02
+    # 标签阈值：按波动率缩放（future_ret 与 pct_change 同量纲，为小数）
+    # 使用 build_features 产出的 atr_ratio (= ATR/close)，买入需 future_ret > k_buy×atr_ratio
+    # 卖出需 future_ret < -k_sell×atr_ratio；floor 为动态阈值下限，避免 ATR 极小时标签过密
+    label_atr_scaled: bool = True
+    label_atr_k_buy: float = 1.5
+    label_atr_k_sell: float = 1.5
+    label_atr_floor_pct: float = 0.004
+    # 信号置信度：随 ATR/价 相对训练段中位数升高而提高门槛（略放宽以增加可交易信号）
+    conf_vol_dynamic: bool = True
+    conf_vol_scale: float = 0.14
+    conf_vol_max_boost: float = 0.10
+    conf_vol_min: float = 0.32
+    conf_vol_max: float = 0.92
 
 
 @dataclass

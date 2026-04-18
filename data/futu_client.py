@@ -7,6 +7,7 @@ Futu OpenD 数据采集封装
 import pandas as pd
 from datetime import datetime, timedelta
 from config.settings import FUTU_CFG
+from data.symbol_mapper import SymbolMapper
 
 try:
     from futu import (
@@ -64,6 +65,8 @@ class FutuDataClient:
         """
         if not self._available or self.quote_ctx is None:
             raise RuntimeError("Futu OpenD 未连接，请先调用 connect()")
+
+        code = SymbolMapper.to_futu(code)
 
         if ktype is None:
             from futu import KLType

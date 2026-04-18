@@ -19,6 +19,8 @@ v2.0 变更:
   - save_scaler() / load_scaler() 替代 main.py 中的 joblib 裸调用
   - 最小样本要求从 60 提升到 130
 """
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import joblib
@@ -56,6 +58,8 @@ class FeatureEngineer:
         self.scaler: StandardScaler = StandardScaler()
         self.feature_columns: list  = []
         self._fitted: bool          = False
+        # 与 prepare_dataset 返回的 valid_index 对齐，供波动自适应置信度等使用
+        self.last_atr_ratio: Optional[pd.Series] = None
 
     def build_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -133,17 +137,37 @@ class FeatureEngineer:
         df: pd.DataFrame,
         horizon: int        = None,
         buy_threshold: float  = None,
-        sell_threshold: float = None
+        sell_threshold: float = None,
+        use_atr_scaled: Optional[bool] = None,
     ) -> pd.Series:
-        """三分类标签：+1 买入 / 0 观望 / -1 卖出"""
-        horizon  = horizon        or SVM_CFG.prediction_horizon
-        buy_thr  = buy_threshold  or SVM_CFG.threshold_buy
-        sell_thr = sell_threshold or SVM_CFG.threshold_sell
+        """
+        三分类标签：+1 买入 / 0 观望 / -1 卖出
+
+        当 SVM_CFG.label_atr_scaled 为 True 且 df 含 atr_ratio 列时，
+        门限为 k×(ATR/收盘价)，与 future_ret 同量纲，随标的波动率变化。
+        否则使用固定 threshold_buy / threshold_sell（或由参数显式覆盖）。
+        """
+        horizon = horizon or SVM_CFG.prediction_horizon
+        fixed_buy = buy_threshold if buy_threshold is not None else SVM_CFG.threshold_buy
+        fixed_sell = sell_threshold if sell_threshold is not None else SVM_CFG.threshold_sell
+        use_atr = SVM_CFG.label_atr_scaled if use_atr_scaled is None else use_atr_scaled
 
         future_ret = df['close'].pct_change(horizon).shift(-horizon)
         labels = pd.Series(0, index=df.index, name='label')
-        labels[future_ret > buy_thr]  = 1
-        labels[future_ret < sell_thr] = -1
+
+        if use_atr and 'atr_ratio' in df.columns:
+            atr_r = df['atr_ratio'].clip(lower=0).replace([np.inf, -np.inf], np.nan)
+            k_b = SVM_CFG.label_atr_k_buy
+            k_s = SVM_CFG.label_atr_k_sell
+            floor = SVM_CFG.label_atr_floor_pct
+            buy_thr_s = (k_b * atr_r).clip(lower=floor).fillna(fixed_buy)
+            sell_thr_s = (-(k_s * atr_r).clip(lower=floor)).fillna(fixed_sell)
+            labels[future_ret > buy_thr_s] = 1
+            labels[future_ret < sell_thr_s] = -1
+        else:
+            labels[future_ret > fixed_buy] = 1
+            labels[future_ret < fixed_sell] = -1
+
         return labels
 
     def prepare_dataset(self, df: pd.DataFrame) -> tuple:
@@ -185,6 +209,11 @@ class FeatureEngineer:
               f"买入={n_buy}({n_buy/total:.1%})  "
               f"卖出={n_sell}({n_sell/total:.1%})  "
               f"观望={n_hold}({n_hold/total:.1%})")
+
+        if 'atr_ratio' in clean_df.columns:
+            self.last_atr_ratio = clean_df['atr_ratio'].astype(float).copy()
+        else:
+            self.last_atr_ratio = None
 
         return X_scaled, y, self.feature_columns, clean_df.index
 

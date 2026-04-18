@@ -29,7 +29,7 @@ from data.fmp_client import FMPDataClient
 from data.symbol_mapper import SymbolMapper
 from feature.feature_engineer import FeatureEngineer
 from model.svm_model import SVMTradingModel
-from model.signal_generator import SignalGenerator
+from model.signal_generator import SignalGenerator, confidence_thresholds_from_atr
 from model.model_evaluator import ModelEvaluator
 from backtest.backtest_engine import BacktestEngine
 from backtest.metrics import calculate_metrics, print_metrics_report, metrics_to_dict
@@ -62,9 +62,10 @@ def run_backtest(
     start: str,
     end: str,
     optimize: bool = True,
-    conf_threshold: float = 0.7,
+    conf_threshold: float = 0.58,
     fast_search: bool = False,
     file_suffix: str | None = None,
+    conf_vol_dynamic: bool | None = None,
 ) -> tuple:
     """
     完整回测流程（步骤 1~9）
@@ -99,6 +100,9 @@ def run_backtest(
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
     dates_test = valid_index[split_idx:]
+    use_dyn_conf = (
+        SVM_CFG.conf_vol_dynamic if conf_vol_dynamic is None else conf_vol_dynamic
+    )
 
     print(f"  训练集: {split_idx} 样本  |  测试集: {len(X_test)} 样本")
     print(f"  测试区间: {dates_test[0].date()} ~ {dates_test[-1].date()}")
@@ -118,11 +122,40 @@ def run_backtest(
 
     # ── Step 6: 生成交易信号 ───────────────────────────────────
     print("\n[Step 6] 生成交易信号...")
+    conf_per_row = None
+    if use_dyn_conf and getattr(fe, "last_atr_ratio", None) is not None:
+        atr_all = fe.last_atr_ratio
+        train_ix = valid_index[:split_idx]
+        ref = float(atr_all.reindex(train_ix).dropna().median())
+        if not np.isfinite(ref) or ref <= 0:
+            ref = float(atr_all.dropna().median()) or 1e-6
+        atr_test = atr_all.reindex(dates_test).astype(float).fillna(ref).values
+        conf_per_row = confidence_thresholds_from_atr(
+            conf_threshold,
+            atr_test,
+            ref,
+            scale=SVM_CFG.conf_vol_scale,
+            max_boost=SVM_CFG.conf_vol_max_boost,
+            lo=SVM_CFG.conf_vol_min,
+            hi=SVM_CFG.conf_vol_max,
+        )
+        print(
+            f"  [Signal] 波动自适应置信度: ref(ATR/价,训练段)={ref:.4f}  "
+            f"测试段 required_conf∈[{conf_per_row.min():.2f},{conf_per_row.max():.2f}] "
+            f"(base={conf_threshold:.2f})"
+        )
+    elif use_dyn_conf:
+        print("  [Signal] 无 atr_ratio，跳过波动自适应置信度")
+
     sig_gen = SignalGenerator(confidence_threshold=conf_threshold)
     predictions  = model.predict(X_test)
     probabilities = model.predict_proba(X_test)
     signals_df = sig_gen.generate_signals(
-        dates_test, predictions, probabilities, model.model.classes_
+        dates_test,
+        predictions,
+        probabilities,
+        model.model.classes_,
+        confidence_thresholds=conf_per_row,
     )
     signals_df = sig_gen.filter_consecutive_signals(signals_df)
 
@@ -178,7 +211,8 @@ def run_realtime_signal(
     code: str,
     model: SVMTradingModel,
     fe: FeatureEngineer,
-    conf_threshold: float = 0.7
+    conf_threshold: float = 0.58,
+    conf_vol_dynamic: bool | None = None,
 ) -> tuple:
     """
     生成实时买卖信号
@@ -211,18 +245,43 @@ def run_realtime_signal(
 
     classes   = model.model.classes_
     class_idx = int(np.where(classes == pred)[0][0])
+    conf_raw = float(prob[class_idx])
+    use_dyn = SVM_CFG.conf_vol_dynamic if conf_vol_dynamic is None else conf_vol_dynamic
+    thr_eff = conf_threshold
+    if use_dyn and 'atr_ratio' in featured_df.columns:
+        ac = featured_df['atr_ratio'].dropna()
+        if len(ac) > 0:
+            win = min(120, len(ac))
+            ref = float(ac.iloc[-win:].median())
+            a_now = float(featured_df['atr_ratio'].iloc[-1])
+            if np.isfinite(ref) and ref > 0 and np.isfinite(a_now):
+                ratio = max(0.0, a_now / ref - 1.0)
+                boost = min(
+                    SVM_CFG.conf_vol_max_boost,
+                    SVM_CFG.conf_vol_scale * ratio,
+                )
+                thr_eff = float(
+                    np.clip(
+                        conf_threshold + boost,
+                        SVM_CFG.conf_vol_min,
+                        SVM_CFG.conf_vol_max,
+                    )
+                )
+    pred_eff = int(pred) if conf_raw >= thr_eff else 0
 
     signal_info = {
-        'signal':     int(pred),
-        'confidence': float(prob[class_idx]),
+        'signal':     pred_eff,
+        'confidence': conf_raw,
+        'required_conf': thr_eff,
         'prob_buy':   float(prob[np.where(classes == 1)[0][0]]) if 1 in classes else 0.0,
         'prob_sell':  float(prob[np.where(classes == -1)[0][0]]) if -1 in classes else 0.0,
     }
 
     # 避免在 GBK 控制台输出 emoji 导致编码错误
-    signal_text = {1: '买入', -1: '卖出', 0: '观望'}.get(pred, '观望')
+    signal_text = {1: '买入', -1: '卖出', 0: '观望'}.get(pred_eff, '观望')
     print(f"\n  当前信号:  {signal_text}")
-    print(f"  置信度:    {signal_info['confidence']:.1%}")
+    print(f"  置信度:    {signal_info['confidence']:.1%}  "
+          f"(要求≥{signal_info['required_conf']:.1%})")
     print(f"  买入概率:  {signal_info['prob_buy']:.1%}")
     print(f"  卖出概率:  {signal_info['prob_sell']:.1%}")
     print(f"  最新收盘:  {df['close'].iloc[-1]:.2f} {_market_currency(code)}")
@@ -337,8 +396,13 @@ def main():
                         choices=['backtest', 'realtime', 'full'],
                         help='运行模式: backtest(仅回测) / realtime(仅实时) / full(完整)')
     parser.add_argument('--no-optimize', action='store_true',             help='跳过 GridSearchCV 参数优化（快速）')
-    parser.add_argument('--conf-threshold', type=float, default=0.7,
+    parser.add_argument('--conf-threshold', type=float, default=0.58,
                         help='信号最小置信度阈值，低于此值的买卖信号将视为观望')
+    parser.add_argument(
+        '--no-dynamic-conf',
+        action='store_true',
+        help='关闭按 ATR/价 相对波动抬高的动态置信度阈值',
+    )
     parser.add_argument('--fast-search', action='store_true',
                         help='启用 RandomizedSearchCV（更快的随机搜索）')
     parser.add_argument('--feishu-webhook', type=str, default=os.environ.get("FEISHU_WEBHOOK", ""),
@@ -365,6 +429,7 @@ def main():
             conf_threshold=args.conf_threshold,
             fast_search=args.fast_search,
             file_suffix=run_suffix,
+            conf_vol_dynamic=not args.no_dynamic_conf,
         )
         metrics_path = OUTPUT_DIR / f"metrics_{args.code.replace('.', '_')}_{run_suffix}.json"
         backtest_png_path = OUTPUT_DIR / f"backtest_{args.code.replace('.', '_')}_{run_suffix}.png"
@@ -388,7 +453,11 @@ def main():
             fe._fitted = True
 
         signal_info, featured_df, fundamental = run_realtime_signal(
-            args.code, model, fe, conf_threshold=args.conf_threshold
+            args.code,
+            model,
+            fe,
+            conf_threshold=args.conf_threshold,
+            conf_vol_dynamic=not args.no_dynamic_conf,
         )
 
         # AI 分析
